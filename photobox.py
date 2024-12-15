@@ -16,7 +16,15 @@ class PhotoboxApp(QMainWindow):
         self.photo_index = 0
         self.cap = None
         self.timer = None
-        self.countdown = 5  # Countdown timer in seconds
+        self.countdown = 10  # Countdown timer in seconds
+
+        #video recording
+        self.video_writer = None
+        self.recording_file = 'recording.mp4'
+        #for timelapse
+        self.frame_skip_interval = 10
+        self.frame_counter = 0
+
 
         # Main layout
         self.central_widget = QWidget()
@@ -34,6 +42,13 @@ class PhotoboxApp(QMainWindow):
         self.layout.addWidget(self.package_label)
 
         self.package_selector = QComboBox()
+
+        # Add the placeholder text
+        self.package_selector.addItem("Select Package")  # Placeholder text
+        # Disable the placeholder item
+        self.package_selector.setItemData(0, 0, Qt.ItemDataRole.UserRole - 1)
+
+        #Options
         self.package_selector.addItem("Single (1 Print)")
         self.package_selector.addItem("Double (2 Prints)")
         self.package_selector.currentIndexChanged.connect(self.select_package)
@@ -61,7 +76,7 @@ class PhotoboxApp(QMainWindow):
     def select_package(self):
         """Set the selected package."""
         index = self.package_selector.currentIndex()
-        self.selected_package = "Single" if index == 0 else "Double"
+        self.selected_package = "Single" if index == 1 else "Double"
         QMessageBox.information(self, "Package Selected", f"Selected Package: {self.selected_package}")
 
     def start_photo_session(self):
@@ -78,19 +93,36 @@ class PhotoboxApp(QMainWindow):
             QMessageBox.critical(self, "Error", "Camera not detected.")
             return
 
-        QMessageBox.information(self, "Photo Session", "Starting photo session. Photos will be taken every 5 seconds.")
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.capture_photo)
-        self.timer.start(5000) 
+        QMessageBox.information(self, "Photo Session", "Starting photo session. Photos will be taken every 10 seconds.")
+        
+        #video
+        frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.video_writer = cv2.VideoWriter(
+            self.recording_file, cv2.VideoWriter_fourcc(*'mp4v'), 30, (frame_width, frame_height)
+        )
+
         # Update video feed
         self.feed_timer = QTimer(self)
         self.feed_timer.timeout.connect(self.update_feed)
         self.feed_timer.start(30)  # Refresh video feed every 30 ms
 
+        self.countdown_timer = QTimer(self)
+        self.countdown_timer.timeout.connect(self.update_countdown)
+        self.countdown_timer.start(1000)
+
+
+
     def update_feed(self):
         """Display the live video feed with a countdown timer."""
         ret, frame = self.cap.read()
         if ret:
+            #timelapse video
+            if self.video_writer is not None and self.frame_counter % self.frame_skip_interval == 0:
+                self.video_writer.write(frame)  # Save frame for timelapse
+
+            self.frame_counter += 1  # Increment frame counter
+
             # Add countdown timer overlay
             overlay_text = f"Time Remaining: {self.countdown} sec"
             cv2.putText(frame, overlay_text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
@@ -101,11 +133,17 @@ class PhotoboxApp(QMainWindow):
             qimg = QImage(frame.data, width, height, step, QImage.Format_RGB888)
             self.video_feed.setPixmap(QPixmap.fromImage(qimg))
 
-        # Countdown logic
-        if self.countdown > 0 and self.photo_index < 6:
+
+    def update_countdown(self):
+        """Handle the countdown logic for photo capture."""
+        if self.countdown > 0:
             self.countdown -= 1
         else:
-            self.countdown = 10  # Reset for next photo
+            self.capture_photo()
+            self.countdown = 10
+
+            if self.photo_index == 6:
+                self.finish_session()
 
 
     def capture_photo(self):
@@ -118,13 +156,15 @@ class PhotoboxApp(QMainWindow):
             self.photo_index += 1
             print(f"Photo {self.photo_index} saved as {photo_name}.")
 
-        if self.photo_index == 6:
-            self.finish_session()
-
     def finish_session(self):
-        """Stop the timer and show captured photos in a grid layout."""
-        self.timer.stop()
+        self.countdown_timer.stop()
         self.feed_timer.stop()
+
+        #save video
+        if self.video_writer is not None:
+            self.video_writer.release()
+            QMessageBox.information(self, "Video Saved", f"Session video saved as {self.recording_file}.")
+
         self.cap.release()
         QMessageBox.information(self, "Session Complete", "Photo session completed. Showing captured photos.")
 
